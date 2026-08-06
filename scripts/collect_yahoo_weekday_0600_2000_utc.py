@@ -1,8 +1,11 @@
-"""Diagnose-Variante: testet EINEN Insert ohne OR IGNORE, um den echten
-Constraint-Fehler sichtbar zu machen (Turso HTTP-API, kein libsql-client)."""
+"""Collector_YahooWeekday_0600-2000_UTC: läuft Mo-Fr 06:00-20:00 UTC,
+jeweils zur Minute 15/35/55 (siehe Workflow).
+Holt Kurse für alle Securities mit Collector = 4 und Ticker IS NOT NULL aus security_master,
+schreibt Intraday-Kurse direkt nach security_prices in Turso (via HTTP-API)."""
 
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -11,6 +14,8 @@ import yfinance as yf
 
 COLLECTOR_ID = 4
 SOURCE_NAME = "YahooWeekday_0600-2000_UTC"
+MAX_RETRIES = 3
+RETRY_BACKOFF_SECONDS = 5
 
 
 class TursoClient:
@@ -46,8 +51,6 @@ class TursoClient:
         resp.raise_for_status()
         data = resp.json()
 
-        print(f"DIAGNOSE: Rohe API-Antwort: {data}")  # <-- zeigt uns ALLES
-
         first = data["results"][0]
         if first.get("type") == "error":
             raise RuntimeError(f"Turso SQL error: {first['error'].get('message')}")
@@ -58,33 +61,75 @@ class TursoClient:
         return rows, affected
 
 
-def main():
+def get_client():
     url = os.environ.get("TURSO_DATABASE_URL", "")
     token = os.environ.get("TURSO_AUTH_TOKEN", "")
-    client = TursoClient(url, token)
+    if not url or not token:
+        print("FEHLER: TURSO_DATABASE_URL oder TURSO_AUTH_TOKEN fehlt.")
+        sys.exit(1)
+    return TursoClient(url, token)
 
+
+def fetch_securities(client):
     rows, _ = client.execute(
-        "SELECT SecurityID, Ticker FROM security_master WHERE Collector = ? AND Ticker IS NOT NULL",
+        "SELECT SecurityID, Ticker FROM security_master "
+        "WHERE Collector = ? AND Ticker IS NOT NULL",
         [COLLECTOR_ID],
     )
-    security_id, ticker = rows[0][0], rows[0][1]
+    return [(row[0], row[1]) for row in rows]
 
-    t = yf.Ticker(ticker)
-    price = float(t.fast_info["last_price"])
+
+def fetch_price_with_retry(ticker):
+    last_error = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            t = yf.Ticker(ticker)
+            price = t.fast_info["last_price"]
+            if price is None:
+                raise ValueError("last_price ist None")
+            return float(price)
+        except Exception as e:
+            last_error = e
+            if attempt < MAX_RETRIES:
+                wait = RETRY_BACKOFF_SECONDS * attempt
+                print(f"  Versuch {attempt} für {ticker} fehlgeschlagen ({e}), warte {wait}s...")
+                time.sleep(wait)
+    raise last_error
+
+
+def main():
+    client = get_client()
+
+    securities = fetch_securities(client)
+    print(f"{len(securities)} Securities mit Collector={COLLECTOR_ID} gefunden.")
+
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    added, skipped, errors = 0, 0, 0
 
-    print(f"DIAGNOSE: Teste INSERT (OHNE OR IGNORE) für SecurityID={security_id}, "
-          f"Ticker={ticker}, Price={price}, PriceDate={now_iso}")
+    for security_id, ticker in securities:
+        try:
+            price = fetch_price_with_retry(ticker)
+            _, affected = client.execute(
+                """INSERT OR IGNORE INTO security_prices
+                   (SecurityID, Price, PriceDate, Source, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                [security_id, price, now_iso, SOURCE_NAME, now_iso],
+            )
+            if affected == 0:
+                skipped += 1
+                print(f"  SKIP   SecurityID={security_id} Ticker={ticker} Price={price}")
+            else:
+                added += 1
+                print(f"  OK     SecurityID={security_id} Ticker={ticker} Price={price}")
+        except Exception as e:
+            errors += 1
+            print(f"  FEHLER SecurityID={security_id} Ticker={ticker}: {e}")
 
-    try:
-        _, affected = client.execute(
-            """INSERT INTO security_prices (SecurityID, Price, PriceDate, Source, created_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            [security_id, price, now_iso, SOURCE_NAME, now_iso],
-        )
-        print(f"DIAGNOSE: Insert erfolgreich! affected_row_count = {affected}")
-    except Exception as e:
-        print(f"DIAGNOSE: ECHTER FEHLER beim Insert: {e}")
+    count_after, _ = client.execute("SELECT COUNT(*) FROM security_prices")
+    print(f"Fertig: {added} neu eingefügt, {skipped} übersprungen, {errors} Fehler.")
+    print(f"Zeilen in security_prices insgesamt: {count_after[0][0]}")
+
+    if added == 0 and errors > 0:
         sys.exit(1)
 
 
