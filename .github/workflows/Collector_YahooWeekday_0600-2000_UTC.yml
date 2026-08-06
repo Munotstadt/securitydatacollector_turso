@@ -1,0 +1,26 @@
+name: Yahoo Collector (Collector_YahooWeekday_0600-2000_UTC)
+
+on:
+  schedule:
+    # Alle 20 Minuten (Minute 15/35/55), Mo-Fr, 06:00-20:00 UTC
+    - cron: '15,35,55 6-20 * * 1-5'
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install yfinance libsql-client
+
+      - name: Run collector
+        run: python scripts/collect_yahoo_weekday_0600_2000_utc.py
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
