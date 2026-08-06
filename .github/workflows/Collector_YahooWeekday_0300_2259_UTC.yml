@@ -1,4 +1,4 @@
-  name: Yahoo Collector (Collector_YahooWeekday_0300-2259_UTC)
+name: Yahoo Collector (Collector_YahooWeekday_0300-2259_UTC)
 
 on:
   schedule:
