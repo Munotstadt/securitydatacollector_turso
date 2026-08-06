@@ -1,14 +1,8 @@
-"""Collector_YahooWeekday_0600-2000_UTC: läuft Mo-Fr 06:00-20:00 UTC,
-jeweils zur Minute 15/35/55 (siehe Workflow).
-Holt Kurse für alle Securities mit Collector = 4 und Ticker IS NOT NULL aus security_master,
-schreibt Intraday-Kurse direkt nach security_prices in Turso.
-
-Nutzt Tursos HTTP-API (v2 Pipeline) direkt statt der veralteten libsql-client-Bibliothek,
-die bekannte Kompatibilitätsprobleme mit dem aktuellen Antwortformat hat."""
+"""Diagnose-Variante: testet EINEN Insert ohne OR IGNORE, um den echten
+Constraint-Fehler sichtbar zu machen (Turso HTTP-API, kein libsql-client)."""
 
 import os
 import sys
-import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -17,22 +11,15 @@ import yfinance as yf
 
 COLLECTOR_ID = 4
 SOURCE_NAME = "YahooWeekday_0600-2000_UTC"
-MAX_RETRIES = 3
-RETRY_BACKOFF_SECONDS = 5
 
 
 class TursoClient:
-    """Minimaler Client für Tursos HTTP-API (Hrana v2 Pipeline), umgeht libsql-client."""
-
     def __init__(self, url, token):
         parsed = urlparse(url)
         host = parsed.hostname
         print(f"DIAGNOSE: Verbinde zu Host = {host}")
         self.endpoint = f"https://{host}/v2/pipeline"
-        self.headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
+        self.headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     @staticmethod
     def _encode_args(args):
@@ -51,15 +38,15 @@ class TursoClient:
         return encoded
 
     def execute(self, sql, args=None):
-        body = {
-            "requests": [
-                {"type": "execute", "stmt": {"sql": sql, "args": self._encode_args(args)}},
-                {"type": "close"},
-            ]
-        }
+        body = {"requests": [
+            {"type": "execute", "stmt": {"sql": sql, "args": self._encode_args(args)}},
+            {"type": "close"},
+        ]}
         resp = requests.post(self.endpoint, headers=self.headers, json=body, timeout=20)
         resp.raise_for_status()
         data = resp.json()
+
+        print(f"DIAGNOSE: Rohe API-Antwort: {data}")  # <-- zeigt uns ALLES
 
         first = data["results"][0]
         if first.get("type") == "error":
@@ -71,87 +58,33 @@ class TursoClient:
         return rows, affected
 
 
-def get_client():
+def main():
     url = os.environ.get("TURSO_DATABASE_URL", "")
     token = os.environ.get("TURSO_AUTH_TOKEN", "")
+    client = TursoClient(url, token)
 
-    if not url or not token:
-        print("FEHLER: TURSO_DATABASE_URL oder TURSO_AUTH_TOKEN fehlt.")
-        sys.exit(1)
-
-    return TursoClient(url, token)
-
-
-def fetch_securities(client):
     rows, _ = client.execute(
-        "SELECT SecurityID, Ticker FROM security_master "
-        "WHERE Collector = ? AND Ticker IS NOT NULL",
+        "SELECT SecurityID, Ticker FROM security_master WHERE Collector = ? AND Ticker IS NOT NULL",
         [COLLECTOR_ID],
     )
-    return [(row[0], row[1]) for row in rows]
+    security_id, ticker = rows[0][0], rows[0][1]
 
-
-def fetch_price_with_retry(ticker):
-    last_error = None
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            t = yf.Ticker(ticker)
-            price = t.fast_info["last_price"]
-            if price is None:
-                raise ValueError("last_price ist None")
-            return float(price)
-        except Exception as e:
-            last_error = e
-            if attempt < MAX_RETRIES:
-                wait = RETRY_BACKOFF_SECONDS * attempt
-                print(f"  Versuch {attempt} für {ticker} fehlgeschlagen ({e}), warte {wait}s...")
-                time.sleep(wait)
-    raise last_error
-
-
-def main():
-    client = get_client()
-
-    count_before, _ = client.execute("SELECT COUNT(*) FROM security_prices")
-    print(f"DIAGNOSE: Zeilen in security_prices VOR dem Lauf: {count_before[0][0]}")
-
-    securities = fetch_securities(client)
-    print(f"{len(securities)} Securities mit Collector={COLLECTOR_ID} gefunden.")
-
+    t = yf.Ticker(ticker)
+    price = float(t.fast_info["last_price"])
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    added, skipped, errors = 0, 0, 0
 
-    for security_id, ticker in securities:
-        try:
-            price = fetch_price_with_retry(ticker)
-            _, affected = client.execute(
-                """INSERT OR IGNORE INTO security_prices
-                   (SecurityID, Price, PriceDate, Source, created_at)
-                   VALUES (?, ?, ?, ?, ?)""",
-                [security_id, price, now_iso, SOURCE_NAME, now_iso],
-            )
-            if affected == 0:
-                skipped += 1
-                print(f"  SKIP   SecurityID={security_id} Ticker={ticker} Price={price}")
-            else:
-                added += 1
-                print(f"  OK     SecurityID={security_id} Ticker={ticker} Price={price}")
-        except Exception as e:
-            errors += 1
-            print(f"  FEHLER SecurityID={security_id} Ticker={ticker}: {e}")
+    print(f"DIAGNOSE: Teste INSERT (OHNE OR IGNORE) für SecurityID={security_id}, "
+          f"Ticker={ticker}, Price={price}, PriceDate={now_iso}")
 
-    count_after, _ = client.execute("SELECT COUNT(*) FROM security_prices")
-    last_rows, _ = client.execute(
-        "SELECT SecurityID, Price, PriceDate FROM security_prices ORDER BY id DESC LIMIT 3"
-    )
-
-    print(f"Fertig: {added} neu eingefügt, {skipped} übersprungen, {errors} Fehler.")
-    print(f"DIAGNOSE: Zeilen in security_prices NACH dem Lauf: {count_after[0][0]}")
-    print("DIAGNOSE: Letzte 3 Zeilen:")
-    for row in last_rows:
-        print(f"  SecurityID={row[0]} Price={row[1]} PriceDate={row[2]}")
-
-    if added == 0 and errors > 0:
+    try:
+        _, affected = client.execute(
+            """INSERT INTO security_prices (SecurityID, Price, PriceDate, Source, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            [security_id, price, now_iso, SOURCE_NAME, now_iso],
+        )
+        print(f"DIAGNOSE: Insert erfolgreich! affected_row_count = {affected}")
+    except Exception as e:
+        print(f"DIAGNOSE: ECHTER FEHLER beim Insert: {e}")
         sys.exit(1)
 
 
