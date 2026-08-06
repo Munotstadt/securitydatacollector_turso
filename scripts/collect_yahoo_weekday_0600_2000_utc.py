@@ -18,8 +18,19 @@ RETRY_BACKOFF_SECONDS = 5
 
 
 def get_client():
-    url = os.environ["TURSO_DATABASE_URL"]
-    token = os.environ["TURSO_AUTH_TOKEN"]
+    url = os.environ.get("TURSO_DATABASE_URL", "")
+    token = os.environ.get("TURSO_AUTH_TOKEN", "")
+
+    if not url or not token:
+        print("FEHLER: TURSO_DATABASE_URL oder TURSO_AUTH_TOKEN fehlt.")
+        print("Bitte in Repo-Settings -> Secrets and variables -> Actions prüfen.")
+        sys.exit(1)
+
+    # HTTP-Transport statt WebSocket erzwingen
+    # (umgeht WSServerHandshakeError bei GitHub-Actions-Runnern)
+    if url.startswith("libsql://"):
+        url = url.replace("libsql://", "https://", 1)
+
     return libsql_client.create_client_sync(url=url, auth_token=token)
 
 
