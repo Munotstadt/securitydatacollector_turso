@@ -7,6 +7,7 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import yfinance as yf
 import libsql_client
@@ -23,11 +24,12 @@ def get_client():
 
     if not url or not token:
         print("FEHLER: TURSO_DATABASE_URL oder TURSO_AUTH_TOKEN fehlt.")
-        print("Bitte in Repo-Settings -> Secrets and variables -> Actions prüfen.")
         sys.exit(1)
 
-    # HTTP-Transport statt WebSocket erzwingen
-    # (umgeht WSServerHandshakeError bei GitHub-Actions-Runnern)
+    # Diagnostik: zeigt, WELCHER Host tatsächlich angesprochen wird (ohne Token preiszugeben)
+    parsed = urlparse(url)
+    print(f"DIAGNOSE: Verbinde zu Host = {parsed.hostname}, Schema = {parsed.scheme}")
+
     if url.startswith("libsql://"):
         url = url.replace("libsql://", "https://", 1)
 
@@ -63,29 +65,52 @@ def fetch_price_with_retry(ticker):
 
 def main():
     client = get_client()
+
+    # Sofort-Check direkt nach Verbindung: Tabellenliste + aktueller Zeilenstand
+    tables_rs = client.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    print("DIAGNOSE: Vorhandene Tabellen:", [row[0] for row in tables_rs.rows])
+
+    count_before = client.execute("SELECT COUNT(*) FROM security_prices").rows[0][0]
+    print(f"DIAGNOSE: Zeilen in security_prices VOR dem Lauf: {count_before}")
+
     securities = fetch_securities(client)
     print(f"{len(securities)} Securities mit Collector={COLLECTOR_ID} gefunden.")
 
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    added, errors = 0, 0
+    added, skipped, errors = 0, 0, 0
 
     for security_id, ticker in securities:
         try:
             price = fetch_price_with_retry(ticker)
-            client.execute(
+            result = client.execute(
                 """INSERT OR IGNORE INTO security_prices
                    (SecurityID, Price, PriceDate, Source, created_at)
                    VALUES (?, ?, ?, ?, ?)""",
                 [security_id, price, now_iso, SOURCE_NAME, now_iso],
             )
-            added += 1
-            print(f"  OK     SecurityID={security_id} Ticker={ticker} Price={price}")
+            print(f"  DIAGNOSE: rows_affected = {result.rows_affected} für SecurityID={security_id}")
+            if result.rows_affected == 0:
+                skipped += 1
+                print(f"  SKIP   SecurityID={security_id} Ticker={ticker} Price={price}")
+            else:
+                added += 1
+                print(f"  OK     SecurityID={security_id} Ticker={ticker} Price={price}")
         except Exception as e:
             errors += 1
             print(f"  FEHLER SecurityID={security_id} Ticker={ticker}: {e}")
 
+    count_after = client.execute("SELECT COUNT(*) FROM security_prices").rows[0][0]
+    last_rs = client.execute(
+        "SELECT SecurityID, Price, PriceDate FROM security_prices ORDER BY id DESC LIMIT 3"
+    )
+
     client.close()
-    print(f"Fertig: {added} Kurse eingefügt, {errors} Fehler.")
+
+    print(f"Fertig: {added} neu eingefügt, {skipped} übersprungen, {errors} Fehler.")
+    print(f"DIAGNOSE: Zeilen in security_prices NACH dem Lauf: {count_after}")
+    print("DIAGNOSE: Letzte 3 Zeilen:")
+    for row in last_rs.rows:
+        print(f"  SecurityID={row[0]} Price={row[1]} PriceDate={row[2]}")
 
     if added == 0 and errors > 0:
         sys.exit(1)
