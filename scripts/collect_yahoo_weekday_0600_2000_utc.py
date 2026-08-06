@@ -26,7 +26,6 @@ def get_client():
         print("FEHLER: TURSO_DATABASE_URL oder TURSO_AUTH_TOKEN fehlt.")
         sys.exit(1)
 
-    # Diagnostik: zeigt, WELCHER Host tatsächlich angesprochen wird (ohne Token preiszugeben)
     parsed = urlparse(url)
     print(f"DIAGNOSE: Verbinde zu Host = {parsed.hostname}, Schema = {parsed.scheme}")
 
@@ -66,7 +65,6 @@ def fetch_price_with_retry(ticker):
 def main():
     client = get_client()
 
-    # Sofort-Check direkt nach Verbindung: Tabellenliste + aktueller Zeilenstand
     tables_rs = client.execute("SELECT name FROM sqlite_master WHERE type='table'")
     print("DIAGNOSE: Vorhandene Tabellen:", [row[0] for row in tables_rs.rows])
 
@@ -77,43 +75,32 @@ def main():
     print(f"{len(securities)} Securities mit Collector={COLLECTOR_ID} gefunden.")
 
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    added, skipped, errors = 0, 0, 0
+    added, errors = 0, 0
 
-    for security_id, ticker in securities:
+    # NUR DEN ERSTEN Security testen, ohne OR IGNORE, um den echten Fehler zu sehen
+    if securities:
+        security_id, ticker = securities[0]
+        price = fetch_price_with_retry(ticker)
+        print(f"DIAGNOSE: Teste Insert OHNE 'OR IGNORE' für SecurityID={security_id}, "
+              f"Ticker={ticker}, Price={price}, PriceDate={now_iso}")
         try:
-            price = fetch_price_with_retry(ticker)
             result = client.execute(
-                """INSERT OR IGNORE INTO security_prices
+                """INSERT INTO security_prices
                    (SecurityID, Price, PriceDate, Source, created_at)
                    VALUES (?, ?, ?, ?, ?)""",
                 [security_id, price, now_iso, SOURCE_NAME, now_iso],
             )
-            print(f"  DIAGNOSE: rows_affected = {result.rows_affected} für SecurityID={security_id}")
-            if result.rows_affected == 0:
-                skipped += 1
-                print(f"  SKIP   SecurityID={security_id} Ticker={ticker} Price={price}")
-            else:
-                added += 1
-                print(f"  OK     SecurityID={security_id} Ticker={ticker} Price={price}")
+            print(f"DIAGNOSE: Insert erfolgreich! rows_affected = {result.rows_affected}, "
+                  f"last_insert_rowid = {result.last_insert_rowid}")
         except Exception as e:
-            errors += 1
-            print(f"  FEHLER SecurityID={security_id} Ticker={ticker}: {e}")
+            print(f"DIAGNOSE: ECHTER FEHLER beim Insert: {type(e).__name__}: {e}")
+            client.close()
+            sys.exit(1)
 
     count_after = client.execute("SELECT COUNT(*) FROM security_prices").rows[0][0]
-    last_rs = client.execute(
-        "SELECT SecurityID, Price, PriceDate FROM security_prices ORDER BY id DESC LIMIT 3"
-    )
+    print(f"DIAGNOSE: Zeilen in security_prices NACH dem Testinsert: {count_after}")
 
     client.close()
-
-    print(f"Fertig: {added} neu eingefügt, {skipped} übersprungen, {errors} Fehler.")
-    print(f"DIAGNOSE: Zeilen in security_prices NACH dem Lauf: {count_after}")
-    print("DIAGNOSE: Letzte 3 Zeilen:")
-    for row in last_rs.rows:
-        print(f"  SecurityID={row[0]} Price={row[1]} PriceDate={row[2]}")
-
-    if added == 0 and errors > 0:
-        sys.exit(1)
 
 
 if __name__ == "__main__":
