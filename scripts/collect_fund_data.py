@@ -35,6 +35,10 @@ import requests
 import yfinance as yf
 
 TURSO_DATABASE_URL = os.environ["TURSO_DATABASE_URL"].rstrip("/")
+if TURSO_DATABASE_URL.startswith("libsql://"):
+    TURSO_DATABASE_URL = "https://" + TURSO_DATABASE_URL[len("libsql://"):]
+elif TURSO_DATABASE_URL.startswith("wss://"):
+    TURSO_DATABASE_URL = "https://" + TURSO_DATABASE_URL[len("wss://"):]
 TURSO_AUTH_TOKEN = os.environ["TURSO_AUTH_TOKEN"]
 
 SOURCE = "yfinance"
