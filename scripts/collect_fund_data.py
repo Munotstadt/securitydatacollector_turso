@@ -20,12 +20,9 @@ of the Munotstadt suite:
 Run schedule: weekly (fund composition data doesn't change intraday) —
 see .github/workflows/collect_fund_data.yml.
 
-Env vars required:
-  TURSO_API_TOKEN   Turso Platform API token (org-level, for minting a
-                     short-lived DB token — same secret already used by
-                     your other collectors / turso_admin / turso_backup)
-  TURSO_ORG         Turso org slug, e.g. "munotstadt"
-  TURSO_DB_NAME     Turso database name, e.g. "munotstadtsecuritydb"
+Env vars required (same secrets already used elsewhere in this repo):
+  TURSO_DATABASE_URL   e.g. "https://munotstadtsecuritydb-munotstadt.aws-eu-west-1.turso.io"
+  TURSO_AUTH_TOKEN     Database-scoped auth token
 """
 
 import os
@@ -37,9 +34,8 @@ from datetime import datetime, timezone
 import requests
 import yfinance as yf
 
-TURSO_API_TOKEN = os.environ["TURSO_API_TOKEN"]
-TURSO_ORG = os.environ["TURSO_ORG"]
-TURSO_DB_NAME = os.environ["TURSO_DB_NAME"]
+TURSO_DATABASE_URL = os.environ["TURSO_DATABASE_URL"].rstrip("/")
+TURSO_AUTH_TOKEN = os.environ["TURSO_AUTH_TOKEN"]
 
 SOURCE = "yfinance"
 TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -51,33 +47,15 @@ CATEGORICAL_DATA_TYPES = {"AssetClass", "SectorWeight", "BondRating", "FundOverv
 
 
 # ---------------------------------------------------------------------------
-# Turso: short-lived read-write token + direct HTTP /v2/pipeline client
+# Turso: direct HTTP /v2/pipeline client using a pre-provisioned DB URL +
+# auth token (same TURSO_DATABASE_URL / TURSO_AUTH_TOKEN secrets already
+# configured in this repo). No Platform API / token-minting involved.
 # (libsql-client has known bugs against Turso's HTTP API — use raw HTTP,
 # consistent with the rest of the Munotstadt suite.)
 # ---------------------------------------------------------------------------
-def mint_turso_token(expiration="10m", authorization="full-access"):
-    """
-    Mints a short-lived scoped token via the Turso Platform API.
-
-    NOTE: if you already have a shared helper for this (turso_admin /
-    turso_backup / your other collectors all mint tokens the same way),
-    prefer reusing that exact implementation instead of this one, so all
-    scripts stay consistent if Turso's Platform API ever changes.
-    """
-    url = f"https://api.turso.tech/v1/organizations/{TURSO_ORG}/databases/{TURSO_DB_NAME}/auth/tokens"
-    resp = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {TURSO_API_TOKEN}"},
-        params={"expiration": expiration, "authorization": authorization},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()["jwt"]
-
-
 class TursoClient:
-    def __init__(self, db_name, org, token):
-        self.base_url = f"https://{db_name}-{org}.turso.io/v2/pipeline"
+    def __init__(self, database_url, token):
+        self.base_url = f"{database_url}/v2/pipeline"
         self.token = token
 
     @staticmethod
@@ -303,8 +281,7 @@ def collect_for_security(db, ticker_symbol, security_id):
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    token = mint_turso_token()
-    db = TursoClient(TURSO_DB_NAME, TURSO_ORG, token)
+    db = TursoClient(TURSO_DATABASE_URL, TURSO_AUTH_TOKEN)
 
     securities = db.query(
         """
