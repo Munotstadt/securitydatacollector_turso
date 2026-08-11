@@ -1,0 +1,27 @@
+name: Collect Share Data (Fundamentals)
+
+on:
+  schedule:
+    # Weekly, Sunday 06:45 UTC — 30 Min nach dem Fund-Collector, um Yahoo nicht gleichzeitig zu belasten
+    - cron: "45 6 * * 0"
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install yfinance requests
+
+      - name: Run collector
+        run: python scripts/collect_share_data.py
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
