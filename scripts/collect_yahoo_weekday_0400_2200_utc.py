@@ -1,4 +1,4 @@
-"""Collector_YahooWeekday_0300-2259_UTC: läuft Mo-Fr 03:00-22:59 UTC,
+"""Collector_YahooWeekday_0400-2200_UTC: läuft Mo-Fr 04:00-22:00 UTC,
 jeweils zur Minute 03/23/43 (siehe Workflow).
 Holt Kurse für alle Securities mit Collector = 6 und Ticker IS NOT NULL aus security_master,
 schreibt Intraday-Kurse direkt nach security_prices in Turso (via HTTP-API)."""
@@ -13,7 +13,7 @@ import requests
 import yfinance as yf
 
 COLLECTOR_ID = 6
-SOURCE_NAME = "YahooWeekday_0300-2259_UTC"
+SOURCE_NAME = "YahooWeekday_0400-2200_UTC"
 MAX_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 5
 
@@ -50,11 +50,9 @@ class TursoClient:
         resp = requests.post(self.endpoint, headers=self.headers, json=body, timeout=20)
         resp.raise_for_status()
         data = resp.json()
-
         first = data["results"][0]
         if first.get("type") == "error":
             raise RuntimeError(f"Turso SQL error: {first['error'].get('message')}")
-
         result = first["response"]["result"]
         rows = [[cell.get("value") for cell in row] for row in result.get("rows", [])]
         affected = int(result.get("affected_row_count", 0))
@@ -99,7 +97,6 @@ def fetch_price_with_retry(ticker):
 
 def main():
     client = get_client()
-
     securities = fetch_securities(client)
     print(f"{len(securities)} Securities mit Collector={COLLECTOR_ID} gefunden.")
 
