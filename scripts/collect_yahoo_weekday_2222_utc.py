@@ -1,6 +1,6 @@
 """Collector_YahooWeekday_2222_UTC: läuft Mo-Fr, einmal täglich um 22:22 UTC
 (siehe Workflow).
-Holt Kurse für alle Securities mit Collector = 7 und Ticker IS NOT NULL aus security_master,
+Holt Kurse für alle Securities mit Collector = 43 und Ticker IS NOT NULL aus security_master,
 schreibt Intraday-Kurse direkt nach security_prices in Turso (via HTTP-API)."""
 
 import os
@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 import requests
 import yfinance as yf
 
-COLLECTOR_ID = 7
+COLLECTOR_ID = 43
 SOURCE_NAME = "YahooWeekday_2222_UTC"
 MAX_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 5
