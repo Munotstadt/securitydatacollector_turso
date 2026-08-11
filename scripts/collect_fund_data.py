@@ -290,8 +290,8 @@ def collect_for_security(db, ticker_symbol, security_id):
     facts += facts_from_fund_field(fd.equity_holdings, "EquityHolding", name_col_candidates=["index"], value_col_candidates=[0, "Value"])
 
     # Fund overview + operations — metric KEYS are a bounded vocabulary (category, totalAssets, yield, ...)
-    facts += facts_from_dict(fd.fund_overview, "FundOverview")
-    facts += facts_from_dict(fd.fund_operations, "FundOperations")
+    facts += facts_from_fund_field(fd.fund_overview, "FundOverview", name_col_candidates=["index"], value_col_candidates=[0, "Value"], unit=None)
+    facts += facts_from_fund_field(fd.fund_operations, "FundOperations", name_col_candidates=["index"], value_col_candidates=[0, "Value"], unit=None)
 
     # Description as a single text row under a fixed 'description' key
     if fd.description:
