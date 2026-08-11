@@ -1,8 +1,8 @@
-name: Yahoo Collector (Collector_YahooWeekday_1200-2259_UTC)
+name: Yahoo Collector (Collector_YahooWeekday_1300-2200_UTC)
 
 on:
   schedule:
-    - cron: '1,21,41 12-22 * * 1-5'
+    - cron: '1,21,41 13-22 * * 1-5'
   workflow_dispatch: {}
 
 jobs:
@@ -10,16 +10,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
       - name: Install dependencies
         run: pip install yfinance requests
-
       - name: Run collector
-        run: python scripts/collect_yahoo_weekday_1200_2259_utc.py
+        run: python scripts/collect_yahoo_weekday_1300_2200_utc.py
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
