@@ -213,6 +213,32 @@ def facts_from_dict(d, data_type):
     return facts
 
 
+def facts_from_fund_field(data, data_type, name_col_candidates, value_col_candidates, unit="%"):
+    """
+    Unified dispatcher for yfinance funds_data fields (top_holdings, asset_classes,
+    sector_weightings, bond_ratings, bond_holdings, equity_holdings) — depending on
+    the fund/yfinance version these come back as a DataFrame, a dict, an empty dict
+    ({}), or None. Handles all of them without crashing.
+    """
+    if data is None:
+        return []
+    if isinstance(data, dict):
+        if not data:
+            return []
+        # dict form: apply the same fraction->percent normalization as the DataFrame path
+        converted = {}
+        for k, v in data.items():
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                converted[k] = v * 100 if (unit == "%" and abs(v) <= 1.0) else v
+            else:
+                converted[k] = v
+        return facts_from_dict(converted, data_type)
+    # assume DataFrame-like
+    if not hasattr(data, "empty"):
+        return []  # unknown/unsupported shape — skip rather than crash
+    return facts_from_dataframe(data, data_type, name_col_candidates, value_col_candidates, unit)
+
+
 def facts_to_statements(db, security_id, facts):
     """Resolves each fact to a final INSERT statement, using FieldNameID for
     categorical DataTypes (resolving/creating the security_parameter row) and
@@ -245,30 +271,23 @@ def collect_for_security(db, ticker_symbol, security_id):
     facts = []
 
     # Top holdings (DataFrame: index=symbol/name, column like 'Holding Percent') — free text, unbounded
-    facts += facts_from_dataframe(
+    facts += facts_from_fund_field(
         fd.top_holdings, "TopHolding",
         name_col_candidates=["Symbol", "Name", "index"],
         value_col_candidates=["Holding Percent", "holdingPercent"],
     )
 
     # Asset classes — bounded vocabulary
-    asset_classes = fd.asset_classes
-    if isinstance(asset_classes, dict):
-        facts += facts_from_dict({k: (v * 100 if isinstance(v, (int, float)) else v) for k, v in asset_classes.items()}, "AssetClass")
-    else:
-        facts += facts_from_dataframe(asset_classes, "AssetClass", name_col_candidates=["index"], value_col_candidates=[0, "Value"])
+    facts += facts_from_fund_field(fd.asset_classes, "AssetClass", name_col_candidates=["index"], value_col_candidates=[0, "Value"])
 
     # Sector weightings — bounded vocabulary (GICS-ish sectors)
-    sector_weightings = fd.sector_weightings
-    if isinstance(sector_weightings, dict):
-        facts += facts_from_dict({k: (v * 100 if isinstance(v, (int, float)) else v) for k, v in sector_weightings.items()}, "SectorWeight")
-    else:
-        facts += facts_from_dataframe(sector_weightings, "SectorWeight", name_col_candidates=["index"], value_col_candidates=[0, "Value"])
+    facts += facts_from_fund_field(fd.sector_weightings, "SectorWeight", name_col_candidates=["index"], value_col_candidates=[0, "Value"])
 
     # Bond ratings — bounded vocabulary; bond/equity holdings — free text, unbounded
-    facts += facts_from_dataframe(fd.bond_ratings, "BondRating", name_col_candidates=["index", "Rating"], value_col_candidates=[0, "Value"])
-    facts += facts_from_dataframe(fd.bond_holdings, "BondHolding", name_col_candidates=["index"], value_col_candidates=[0, "Value"])
-    facts += facts_from_dataframe(fd.equity_holdings, "EquityHolding", name_col_candidates=["index"], value_col_candidates=[0, "Value"])
+    # (equity-only funds return {} for these — handled gracefully by facts_from_fund_field)
+    facts += facts_from_fund_field(fd.bond_ratings, "BondRating", name_col_candidates=["index", "Rating"], value_col_candidates=[0, "Value"])
+    facts += facts_from_fund_field(fd.bond_holdings, "BondHolding", name_col_candidates=["index"], value_col_candidates=[0, "Value"])
+    facts += facts_from_fund_field(fd.equity_holdings, "EquityHolding", name_col_candidates=["index"], value_col_candidates=[0, "Value"])
 
     # Fund overview + operations — metric KEYS are a bounded vocabulary (category, totalAssets, yield, ...)
     facts += facts_from_dict(fd.fund_overview, "FundOverview")
