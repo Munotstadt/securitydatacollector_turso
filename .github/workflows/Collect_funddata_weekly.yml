@@ -5,7 +5,7 @@ on:
     # Weekly, Sunday 06:15 UTC — fund composition data changes slowly,
     # no need for the intraday cadence used by the price collectors.
     - cron: "15 6 * * 0"
-  workflow_dispatch: {}   # allows manual "Run workflow" trigger
+  workflow_dispatch: {}
 
 jobs:
   collect:
@@ -19,10 +19,10 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install yfinance requests
 
       - name: Run collector
+        run: python collect_fund_data.py
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-        run: python scripts/collect_fund_data.py
