@@ -124,21 +124,62 @@ def main():
 
     client = create_client_sync(url=url, auth_token=auth_token)
     try:
+        # Bekannte SecurityIDs aus security_master laden. Zeilen mit einer
+        # SecurityID, die dort nicht existiert, wuerden die FOREIGN KEY
+        # Constraint verletzen und (da client.batch() transaktional ist) den
+        # gesamten Batch abbrechen -- deshalb werden sie vorab herausgefiltert.
+        result = client.execute("SELECT SecurityID FROM security_master")
+        known_ids = {r[0] for r in result.rows}
+
+        valid_rows = [r for r in rows if r[0] in known_ids]
+        unknown_ids = sorted({r[0] for r in rows if r[0] not in known_ids})
+
+        if unknown_ids:
+            print(
+                f"{len(rows) - len(valid_rows)} Zeilen uebersprungen, da "
+                f"{len(unknown_ids)} SecurityID(s) nicht in security_master existieren:"
+            )
+            print(f"  {unknown_ids}")
+
+        if not valid_rows:
+            print("Keine gueltigen Zeilen (mit bekannter SecurityID) zu importieren.")
+            return
+
         insert_sql = f"""
             INSERT OR IGNORE INTO {TABLE} (SecurityID, Price, PriceDate, Source)
             VALUES (?, ?, ?, ?)
         """
 
         inserted = 0
-        for i in range(0, len(rows), BATCH_SIZE):
-            chunk = rows[i : i + BATCH_SIZE]
+        failed = 0
+        for i in range(0, len(valid_rows), BATCH_SIZE):
+            chunk = valid_rows[i : i + BATCH_SIZE]
             statements = [(insert_sql, list(row)) for row in chunk]
-            results = client.batch(statements)
-            inserted += sum(1 for res in results if getattr(res, "rows_affected", 0))
-            print(f"  {min(i + BATCH_SIZE, len(rows))}/{len(rows)} verarbeitet...")
+            try:
+                results = client.batch(statements)
+                inserted += sum(1 for res in results if getattr(res, "rows_affected", 0))
+            except Exception as e:
+                # Falls doch ein Batch fehlschlaegt (z.B. anderer
+                # Constraint-Verstoss), Zeile fuer Zeile einzeln versuchen,
+                # damit ein einzelner problematischer Datensatz nicht den
+                # gesamten restlichen Import blockiert.
+                print(f"  Batch fehlgeschlagen ({e}), verarbeite Zeilen einzeln...")
+                for row in chunk:
+                    try:
+                        res = client.execute(insert_sql, list(row))
+                        if getattr(res, "rows_affected", 0):
+                            inserted += 1
+                    except Exception as row_err:
+                        failed += 1
+                        print(f"    Zeile uebersprungen {row}: {row_err}")
+            print(f"  {min(i + BATCH_SIZE, len(valid_rows))}/{len(valid_rows)} verarbeitet...")
 
-        skipped = len(rows) - inserted
-        print(f"Fertig: {inserted} neue Zeilen eingefuegt, {skipped} Duplikate/bereits vorhanden uebersprungen.")
+        skipped = len(valid_rows) - inserted - failed
+        print(
+            f"Fertig: {inserted} neue Zeilen eingefuegt, {skipped} Duplikate/bereits "
+            f"vorhanden uebersprungen, {failed} Zeilen mit Fehler, "
+            f"{len(rows) - len(valid_rows)} wegen unbekannter SecurityID uebersprungen."
+        )
     finally:
         client.close()
 
