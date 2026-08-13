@@ -102,6 +102,15 @@ def main():
     url = os.environ["TURSO_DATABASE_URL"]
     auth_token = os.environ["TURSO_AUTH_TOKEN"]
 
+    # libsql-client versucht bei "libsql://" oder "wss://" per WebSocket (Hrana)
+    # zu verbinden. Das schlaegt auf manchen Runnern/Netzwerken (z.B. GitHub
+    # Actions) mit einem WSServerHandshakeError fehl. Der HTTP-Modus
+    # (Schema "https://") ist zuverlaessiger und wird deshalb erzwungen.
+    if url.startswith("libsql://"):
+        url = "https://" + url[len("libsql://") :]
+    elif url.startswith("wss://"):
+        url = "https://" + url[len("wss://") :]
+
     rows, errors = read_rows(csv_path)
     print(f"{len(rows)} gueltige Zeilen aus {csv_path} gelesen.")
     if errors:
