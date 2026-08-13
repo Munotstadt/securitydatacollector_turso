@@ -1,0 +1,35 @@
+name: Import Security Prices to Turso
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "security_upload_auto.csv"
+  workflow_dispatch:
+    inputs:
+      file_path:
+        description: "Pfad zur CSV-Datei relativ zum Repo-Root"
+        required: false
+        default: "security_upload_auto.csv"
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Import CSV into Turso (security_prices)
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: |
+          python scripts/import_security_prices.py "${{ github.event.inputs.file_path || 'security_upload_auto.csv' }}"
