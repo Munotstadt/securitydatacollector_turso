@@ -1,24 +1,19 @@
 name: Yahoo Collector (Collector_Other)
-
 on:
   schedule:
-    # Analog Weekday-Cadence: alle 30 Minuten, Mo-Fr, 02:00-22:00 UTC
-    - cron: '0,30 2-22 * * 1-5'
+    # 1x täglich um 19:22 UTC
+    - cron: '22 19 * * *'
   workflow_dispatch: {}
-
 jobs:
   collect:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
       - name: Install dependencies
         run: pip install requests
-
       - name: Run collector
         run: python scripts/collect_other.py
         env:
