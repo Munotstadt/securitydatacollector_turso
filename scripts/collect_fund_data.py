@@ -14,8 +14,12 @@ of the Munotstadt suite:
     rating buckets, fund overview/operations metric keys) are resolved to
     a security_parameter.ParameterID via FieldNameID — new ones are
     auto-created on first sight (ParaTable='security_data', ParaField=DataType).
-  - Unbounded field names (top holding / equity / bond holding issuer
-    names) stay as free text in FieldName.
+  - Unbounded field names (bond/equity holding issuer names) stay as free
+    text in FieldName.
+  - Top holdings are special-cased: FieldName holds the company NAME,
+    FieldValue holds the ticker SYMBOL, NumericValue holds the holding
+    percent — both name and symbol are preserved (previously only the
+    symbol was captured and the name was silently dropped).
 
 Run schedule: weekly (fund composition data doesn't change intraday) —
 see .github/workflows/collect_fund_data.yml.
@@ -46,7 +50,9 @@ TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 PARA_TABLE = "security_data"
 
 # DataTypes whose FieldName is a bounded/reusable vocabulary -> parameter-linked (FieldNameID).
-# Everything else (TopHolding, EquityHolding, BondHolding) stays free text (FieldName).
+# Everything else (EquityHolding, BondHolding) stays free text (FieldName).
+# TopHolding is handled separately (see facts_from_top_holdings) since it needs
+# BOTH a name and a symbol, not just a name/value pair.
 CATEGORICAL_DATA_TYPES = {"AssetClass", "SectorWeight", "BondRating", "FundOverview", "FundOperations", "Fundamental"}
 
 
@@ -198,6 +204,54 @@ def facts_from_dataframe(df, data_type, name_col_candidates, value_col_candidate
     return facts
 
 
+def facts_from_top_holdings(data):
+    """Special-cased extraction for fd.top_holdings: yfinance returns a DataFrame
+    indexed by ticker Symbol, with a 'Name' column (company name) and a
+    'Holding Percent' column. We keep BOTH the symbol and the name:
+      - FieldName  = company name  (e.g. "Apple Inc.")
+      - FieldValue = ticker symbol (e.g. "AAPL")
+      - NumericValue = holding percent
+    Previously only the symbol was captured (as FieldName) and the company
+    name was silently dropped."""
+    facts = []
+    if data is None:
+        return facts
+    if isinstance(data, dict):
+        if not data:
+            return facts
+        # Unexpected dict shape for top_holdings — skip rather than guess wrong structure.
+        return facts
+    if not hasattr(data, "empty") or data.empty:
+        return facts
+
+    df = data.reset_index()
+
+    # Symbol is normally the (former) index -> column named 'Symbol' or 'index'.
+    symbol_col = next((c for c in ["Symbol", "symbol", "index"] if c in df.columns), df.columns[0])
+    name_col = next((c for c in ["Name", "name", "Holding Name"] if c in df.columns), None)
+    value_col = next((c for c in ["Holding Percent", "holdingPercent"] if c in df.columns), None)
+
+    for _, row in df.iterrows():
+        symbol = str(row[symbol_col]) if symbol_col else None
+        name = str(row[name_col]) if name_col and row[name_col] is not None else symbol
+        numeric_value = None
+        if value_col is not None:
+            try:
+                numeric_value = float(row[value_col])
+                if abs(numeric_value) <= 1.0:
+                    numeric_value *= 100  # fraction -> percent
+            except (TypeError, ValueError):
+                numeric_value = None
+        facts.append({
+            "data_type": "TopHolding",
+            "field_name": name,       # company name
+            "field_value": symbol,    # ticker symbol
+            "numeric_value": numeric_value,
+            "unit": "%" if numeric_value is not None else None,
+        })
+    return facts
+
+
 def facts_from_dict(d, data_type):
     """Generic dict -> list of fact dicts (used for fund_overview / fund_operations)."""
     facts = []
@@ -215,10 +269,12 @@ def facts_from_dict(d, data_type):
 
 def facts_from_fund_field(data, data_type, name_col_candidates, value_col_candidates, unit="%"):
     """
-    Unified dispatcher for yfinance funds_data fields (top_holdings, asset_classes,
+    Unified dispatcher for yfinance funds_data fields (asset_classes,
     sector_weightings, bond_ratings, bond_holdings, equity_holdings) — depending on
     the fund/yfinance version these come back as a DataFrame, a dict, an empty dict
     ({}), or None. Handles all of them without crashing.
+    (top_holdings is handled separately by facts_from_top_holdings, since it
+    needs both a name and a symbol column, not just a name/value pair.)
     """
     if data is None:
         return []
@@ -242,7 +298,7 @@ def facts_from_fund_field(data, data_type, name_col_candidates, value_col_candid
 def facts_to_statements(db, security_id, facts):
     """Resolves each fact to a final INSERT statement, using FieldNameID for
     categorical DataTypes (resolving/creating the security_parameter row) and
-    plain FieldName text for unbounded ones (Holdings)."""
+    plain FieldName text for unbounded ones (Holdings, TopHolding)."""
     statements = []
     for f in facts:
         if f["data_type"] in CATEGORICAL_DATA_TYPES:
@@ -270,12 +326,9 @@ def collect_for_security(db, ticker_symbol, security_id):
 
     facts = []
 
-    # Top holdings (DataFrame: index=symbol/name, column like 'Holding Percent') — free text, unbounded
-    facts += facts_from_fund_field(
-        fd.top_holdings, "TopHolding",
-        name_col_candidates=["Symbol", "Name", "index"],
-        value_col_candidates=["Holding Percent", "holdingPercent"],
-    )
+    # Top holdings — special-cased: keeps BOTH company name (FieldName) and
+    # ticker symbol (FieldValue), plus holding percent (NumericValue).
+    facts += facts_from_top_holdings(fd.top_holdings)
 
     # Asset classes — bounded vocabulary
     facts += facts_from_fund_field(fd.asset_classes, "AssetClass", name_col_candidates=["index"], value_col_candidates=[0, "Value"])
