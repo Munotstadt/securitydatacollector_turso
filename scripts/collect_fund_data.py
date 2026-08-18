@@ -21,6 +21,10 @@ of the Munotstadt suite:
     percent — both name and symbol are preserved (previously only the
     symbol was captured and the name was silently dropped).
 
+Rows that carry no usable information are dropped before insert:
+  - FieldValue IS NULL AND NumericValue IS NULL
+  - FieldName IS NULL AND FieldValue IS NULL AND NumericValue = 0
+
 Run schedule: weekly (fund composition data doesn't change intraday) —
 see .github/workflows/collect_fund_data.yml.
 
@@ -295,12 +299,34 @@ def facts_from_fund_field(data, data_type, name_col_candidates, value_col_candid
     return facts_from_dataframe(data, data_type, name_col_candidates, value_col_candidates, unit)
 
 
+def is_empty_fact(f):
+    """
+    Rows that carry no usable information are dropped before they are turned
+    into INSERT statements:
+      - FieldValue IS NULL AND NumericValue IS NULL          (nothing to store at all)
+      - FieldName IS NULL AND FieldValue IS NULL AND NumericValue = 0   (zero/empty noise)
+    """
+    field_name = f["field_name"]
+    field_value = f["field_value"]
+    numeric_value = f["numeric_value"]
+
+    if field_value is None and numeric_value is None:
+        return True
+    if field_name is None and field_value is None and numeric_value == 0:
+        return True
+    return False
+
+
 def facts_to_statements(db, security_id, facts):
     """Resolves each fact to a final INSERT statement, using FieldNameID for
     categorical DataTypes (resolving/creating the security_parameter row) and
-    plain FieldName text for unbounded ones (Holdings, TopHolding)."""
+    plain FieldName text for unbounded ones (Holdings, TopHolding).
+    Facts that carry no usable information (see is_empty_fact) are skipped."""
     statements = []
     for f in facts:
+        if is_empty_fact(f):
+            continue
+
         if f["data_type"] in CATEGORICAL_DATA_TYPES:
             field_name_id = resolve_parameter_id(db, f["data_type"], f["field_name"])
             statements.append((
