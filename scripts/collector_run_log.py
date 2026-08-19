@@ -49,6 +49,7 @@ ZURICH = ZoneInfo("Europe/Zurich")
 
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS collector_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     collectortype text,
     runat text,
     status text,
