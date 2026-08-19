@@ -86,6 +86,26 @@ class TursoClient:
                 encoded.append({"type": "text", "value": str(a)})
         return encoded
 
+    @staticmethod
+    def _decode_cell(cell):
+        """Turso's /v2/pipeline encodes every cell as {"type": ..., "value": ...},
+        with integer/float values sent as STRINGS (to avoid JS/JSON precision
+        loss) - e.g. {"type": "integer", "value": "150"}. Callers doing
+        arithmetic on a COUNT(*) result need the actual int/float back, not
+        the raw string, so decode by declared type here (same pattern as
+        TursoClient._from_cell in collect_fund_data.py)."""
+        if cell is None:
+            return None
+        ctype = cell.get("type")
+        val = cell.get("value")
+        if ctype == "null" or val is None:
+            return None
+        if ctype == "integer":
+            return int(val)
+        if ctype == "float":
+            return float(val)
+        return val
+
     def execute(self, sql, args=None, timeout=60):
         body = {"requests": [
             {"type": "execute", "stmt": {"sql": sql, "args": self._encode_args(args)}},
@@ -100,7 +120,7 @@ class TursoClient:
             raise RuntimeError(f"Turso SQL error: {first['error'].get('message')}")
 
         result = first["response"]["result"]
-        rows = [[cell.get("value") for cell in row] for row in result.get("rows", [])]
+        rows = [[self._decode_cell(cell) for cell in row] for row in result.get("rows", [])]
         affected = int(result.get("affected_row_count", 0))
         return rows, affected
 
