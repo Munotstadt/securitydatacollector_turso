@@ -1,0 +1,34 @@
+name: Cleanup Prices Weekly
+
+on:
+  schedule:
+    # Wöchentlich, Sonntag 05:00 UTC — vor den anderen Sonntags-Jobs
+    # (Fund Data 06:15 UTC, Share Data 06:45 UTC).
+    - cron: "0 5 * * 0"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (nichts löschen, nur simulieren/loggen)"
+        type: boolean
+        default: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run cleanup
+        run: python scripts/cleanup_prices_weekly.py
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
