@@ -12,8 +12,11 @@ from urllib.parse import urlparse
 import requests
 import yfinance as yf
 
+from collector_run_log import log_run
+
 COLLECTOR_ID = 5
 SOURCE_NAME = "YahooWeekday_1300-2200_UTC"
+RUN_LOG_LABEL = "Yahoo Weekday 1300-2200 UTC"
 MAX_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 5
 
@@ -126,9 +129,19 @@ def main():
     print(f"Fertig: {added} neu eingefügt, {skipped} übersprungen, {errors} Fehler.")
     print(f"Zeilen in security_prices insgesamt: {count_after[0][0]}")
 
+    status = "OK" if errors == 0 else "ERROR"
+    detail = f"{skipped} skipped, {errors} error(s)" if (skipped or errors) else ""
+    log_run(RUN_LOG_LABEL, status, added, detail)
+
     if added == 0 and errors > 0:
         sys.exit(1)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:
+        log_run(RUN_LOG_LABEL, "ERROR", 0, f"Unhandled exception: {e}")
+        raise
