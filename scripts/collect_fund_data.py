@@ -42,6 +42,10 @@ from datetime import datetime, timezone
 import requests
 import yfinance as yf
 
+from collector_run_log import log_run
+
+RUN_LOG_LABEL = "Fund Data"
+
 TURSO_DATABASE_URL = os.environ["TURSO_DATABASE_URL"].rstrip("/")
 if TURSO_DATABASE_URL.startswith("libsql://"):
     TURSO_DATABASE_URL = "https://" + TURSO_DATABASE_URL[len("libsql://"):]
@@ -417,9 +421,20 @@ def main():
 
     print(f"\nDone. ok={ok} failed={failed} skipped={skipped} total={len(securities)}")
     print(f"security_parameter entries created/resolved this run: {len(_param_cache)}")
+
+    status = "OK" if failed == 0 else "ERROR"
+    detail = f"{failed} failed, {skipped} skipped" if (failed or skipped) else ""
+    log_run(RUN_LOG_LABEL, status, ok, detail)
+
     if failed and failed == len(securities):
         sys.exit(1)  # only hard-fail the job if literally everything failed
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:
+        log_run(RUN_LOG_LABEL, "ERROR", 0, f"Unhandled exception: {e}")
+        raise
