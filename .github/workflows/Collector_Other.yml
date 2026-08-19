@@ -1,9 +1,9 @@
 name: Yahoo Collector (Collector_Other)
 on:
   schedule:
-    # 2x täglich: 07:22 UTC und 19:22 UTC
-    - cron: '22 7 * * *'
-    - cron: '22 19 * * *'
+    # 2x taeglich, nur Mo-Fr: 07:22 UTC und 19:22 UTC
+    - cron: '22 7 * * 1-5'
+    - cron: '22 19 * * 1-5'
   workflow_dispatch: {}
 jobs:
   collect:
